@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {PDFDocument} from 'pdf-lib';
 const dir=await mkdtemp(path.join(tmpdir(),'santa-integration-'));
-Object.assign(process.env,{NODE_ENV:'test',CHILD_SAFETY_REVIEWED:'true',OPENAI_API_KEY:'test-key',SAFETY_EVENTS_FILE:path.join(dir,'events.jsonl')});
+Object.assign(process.env,{NODE_ENV:'test',CHILD_SAFETY_REVIEWED:'true',OPENAI_API_KEY:'test-key',SAFETY_EVENTS_FILE:path.join(dir,'events.jsonl'),GIFT_ARCHIVE_DIR:'',GIFT_ARCHIVE_KEY:'',GIFT_ARCHIVE_KEY_FILE:''});
 const {default:app}=await import('../server.js');const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));const base=`http://127.0.0.1:${server.address().port}`;
 after(()=>server.close());
 const postSession=body=>fetch(base+'/api/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
@@ -106,4 +106,25 @@ test('missing image moderation fails closed without returning a PDF',async()=>{
  app.locals.createOpenAIClient=()=>ai;assert.equal((await sendTurn(id)).status,200);const data=await (await fetch(`${base}/api/session/${id}/finish`,{method:'POST'})).json();
  const result=await fetch(`${base}/api/gifts/book`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:data.bookToken})});assert.equal(result.status,503);assert.equal((await result.json()).code,'book_unavailable');
  const log=(await readFile(process.env.SAFETY_EVENTS_FILE,'utf8')).trim().split('\n').map(JSON.parse);assert.ok(log.some(event=>event.type==='screen_unavailable'&&event.stage==='gift_image_check'));
+});
+
+test('only explicit consent saves the illustrated PDF and the deletion code removes it',async()=>{
+ const {createGiftArchive}=await import('../gift-archive.js');
+ const {randomBytes}=await import('node:crypto');
+ const archive=createGiftArchive({directory:path.join(dir,'archive'),key:randomBytes(32)});app.locals.giftArchive=archive;
+ async function makeBook(saveIllustration){
+  const id=await authorizedCall();app.locals.createOpenAIClient=()=>fakeAI(['safe','safe']);assert.equal((await sendTurn(id)).status,200);
+  const gift=await (await fetch(`${base}/api/session/${id}/finish`,{method:'POST'})).json();
+  return fetch(`${base}/api/gifts/book`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:gift.bookToken,...(saveIllustration===undefined?{}:{saveIllustration})})});
+ }
+ try {
+  let response=await makeBook(undefined);assert.equal(response.status,200);assert.equal(response.headers.get('x-gift-archive'),'not-requested');assert.deepEqual(await archive.list(),[]);
+  response=await makeBook(false);assert.equal(response.status,200);assert.deepEqual(await archive.list(),[]);
+  response=await makeBook(true);assert.equal(response.status,200);assert.equal(response.headers.get('x-gift-archive'),'saved');
+  const code=response.headers.get('x-gift-deletion-code');assert.match(code,/^[A-Za-z0-9_-]{43}$/);const downloaded=Buffer.from(await response.arrayBuffer());
+  const [id]=await archive.list();assert.deepEqual(await archive.read(id),downloaded);assert.equal(downloaded.includes(Buffer.from('A pretend test message')),false);
+  const deletion=await fetch(`${base}/api/gifts/delete-archive`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({code})});assert.equal(deletion.status,204);assert.deepEqual(await archive.list(),[]);
+  app.locals.giftArchive={save:async()=>{throw Error('disk unavailable')}};
+  response=await makeBook(true);assert.equal(response.status,200);assert.equal(response.headers.get('x-gift-archive'),'unavailable');assert.match(response.headers.get('content-type'),/application\/pdf/);
+ } finally {app.locals.giftArchive=null;archive.stop();}
 });

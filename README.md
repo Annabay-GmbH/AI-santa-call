@@ -20,7 +20,7 @@ An Annabay GmbH project, shared under the [GNU General Public License v3.0](LICE
 
 Before a call, a grown-up is asked to acknowledge the AI voice experience and remain with the child. This checkbox does not verify age, adult identity or parental authority. The browser records one short turn at a time. The server transcribes it, runs Responses API inline moderation and a child-safety classifier on the input, generates a response and a personalized gift with an allowlisted visual theme, screens both, then converts the response to speech. If screening fails or flags sensitive content, the call stops and directs the family to a trusted adult. The server keeps the API key private and the conversation in memory; calls expire after five minutes and ending a call deletes it.
 
-Audio and text are sent to OpenAI for processing. If a family requests a picture book, two short, screened scene descriptions derived from the conversation—not the full transcript—are sent to OpenAI image generation, and the resulting illustrations are sent to OpenAI for safety screening. A short-lived private token is held in server memory until the PDF is generated or expires. The PDF is produced in memory and downloaded to the user’s device; it is not saved by the app on the server. The app itself does not save recordings or transcripts to disk, but provider and infrastructure retention policies still apply. Avoid request-body logging and check your deployment's proxy and hosting logs. Server restarts clear active calls. The in-memory session and rate limiter are suitable for a single prototype instance only.
+Audio and text are sent to OpenAI for processing. If a family requests a picture book, two short, screened scene descriptions derived from the conversation—not the full transcript—are sent to OpenAI image generation, and the resulting illustrations are sent to OpenAI for safety screening. A short-lived private token is held in server memory until the PDF is generated or expires. The PDF is produced in memory and can be downloaded to the user’s device. Only if a grown-up explicitly selects the optional archive checkbox, the app also encrypts that illustrated PDF and saves it on the server for a 90-day retention period. No recording, transcript, image prompt, name, or session ID is intentionally written to the archive. The app itself does not save recordings or transcripts to disk, but provider and infrastructure retention policies still apply. Avoid request-body logging and check your deployment's proxy and hosting logs. Server restarts clear active calls. The in-memory session and rate limiter are suitable for a single prototype instance only.
 
 ## Run locally
 
@@ -39,6 +39,24 @@ npm test
 ```
 
 To test actual AI calls, first complete the launch review below, including obtaining and verifying appropriate zero data retention for **every** OpenAI endpoint and model used. Configure the protected safety event log described in [SAFETY.md](SAFETY.md), then set `OPENAI_API_KEY` and `CHILD_SAFETY_REVIEWED=true` in `.env` and restart the server. The flag is an operator attestation, not a technical verification of ZDR or compliance. Calls remain unavailable until all required settings are configured. Never commit `.env` or expose your key in browser code. Model overrides are listed in `.env.example`; verify availability and data controls for any change.
+
+## Optional illustrated-gift archive
+
+This feature is disabled unless `GIFT_ARCHIVE_DIR` and either `GIFT_ARCHIVE_KEY_FILE` or `GIFT_ARCHIVE_KEY` are configured. The checkbox is separate from call consent and unchecked for every new gift. If a grown-up chooses it, only the screened two-page PDF is stored using AES-256-GCM. The family receives a private deletion code, which can be entered under **Delete a saved illustration** on the home page. Keep the code private; it cannot be recovered by the operator. A successful request with a valid code reports the same result if the gift was already deleted or expired. If saving fails, the PDF remains available for download and the page reports the failure.
+
+The server schedules deletion for 90 days after saving and runs cleanup on startup. Deployments must keep the service running and monitor cleanup errors; set up an independent scheduled `node scripts/gift-archive.js cleanup` job and alerting to cover restarts and outages. If neither service nor cleanup job runs, expired files remain until cleanup runs. Ensure backups, snapshots, replicated copies, and exported PDFs follow the same deletion and retention policy; deleting a live file does not erase those copies. Storage encryption is not anonymization: illustrations can reveal details and should be treated as potentially personal data. Assess applicable privacy, consent, access and deletion requirements before public use; a checkbox alone does not verify parental authority.
+
+Configure an absolute, private archive directory outside the web root (directory mode `0700`), and a separate private key file (mode `0600`) containing a base64-encoded 32-byte random key. Keep the key outside the repository and protect its backup separately; losing or changing it makes existing gifts unreadable. Set the absolute paths in `.env` or your secret manager. For example, generate a key with `openssl rand -base64 32` into a protected file without displaying or committing it. Setting `GIFT_ARCHIVE_KEY` directly instead of `GIFT_ARCHIVE_KEY_FILE` is supported for secret managers; never set both.
+
+Authorized operators can inspect the local archive without exposing it on the website:
+
+```sh
+node scripts/gift-archive.js list
+node scripts/gift-archive.js export <archive-id> <new-file.pdf>
+node scripts/gift-archive.js cleanup
+```
+
+The list contains random, non-identifying archive IDs, not names or chat history. Export writes a new unencrypted PDF; protect it and delete it when no longer needed. No automatic copy is created in ChatGPT or an OpenAI storage service. OpenAI receives image-generation and screening requests as described above; API provider retention settings are separate. A future ChatGPT connection would need separate authentication, privacy review and deletion handling.
 
 ## Child safety and launch checklist
 
@@ -62,13 +80,16 @@ This prototype is a starting point, not a guarantee of safe responses or legal c
 | `OPENAI_TRANSCRIBE_MODEL` | Transcription model; defaults to `gpt-transcribe`. |
 | `OPENAI_IMAGE_MODEL` | Illustrated-gift image model; defaults to `gpt-image-2.5-flare`. |
 | `OPENAI_TTS_MODEL` | Speech model; defaults to `gpt-4o-mini-tts`, which accepts Santa-style voice instructions. The legacy `tts-1` and `tts-1-hd` models do not support those instructions. |
+| `GIFT_ARCHIVE_DIR` | Optional absolute path to the private illustrated-gift archive. |
+| `GIFT_ARCHIVE_KEY_FILE` | Optional absolute path to the protected archive encryption key file. |
+| `GIFT_ARCHIVE_KEY` | Alternative base64 32-byte key supplied by a secret manager; never use with the key file. |
 | `PORT` | HTTP port; defaults to `3000`. |
 
 API access and usage incur provider costs, including two image-generation requests and image safety checks for each requested book. Image generation may require OpenAI organization verification. The downloadable book feature and its image services must be included in your ZDR, privacy, consent, and child-safety review before use with children. Confirm model access, rates, and eligible data controls before enabling the service. To diagnose Responses API moderation access with fixed synthetic text, run `npm run check:moderation`; it prints an HTTP status and request ID without logging your key or conversation content.
 
 ## Project structure
 
-- `server.js`, `audio.js`, `safety.js`, `book.js` — call lifecycle, audio preparation, child-safety screening, illustrated PDFs and incident events.
+- `server.js`, `audio.js`, `safety.js`, `book.js`, `gift-archive.js` — call lifecycle, audio preparation, child-safety screening, illustrated PDFs and incident events.
 - `SAFETY.md` — consent limitations and incident response runbook.
 - `public/` — mobile web interface, procedural Three.js character, and call controls.
 - `PROMPT.md` — expanded product brief and Santa behavior guidance.

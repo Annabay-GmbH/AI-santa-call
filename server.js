@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { screenContent, recordSafetyEvent, verifySafetySink } from './safety.js';
 import { prepareAudio, AudioFormatError } from './audio.js';
 import { makeIllustratedBook, GiftImageSafetyError } from './book.js';
+import { archiveFromEnvironment } from './gift-archive.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -23,6 +24,12 @@ app.use(express.static(path.join(root, 'public')));
 const upload = multer({storage: multer.memoryStorage(), limits: {fileSize: 4 * 1024 * 1024, files: 1}});
 const sessions = new Map();
 const finishedGifts = new Map();
+app.locals.giftArchive = archiveFromEnvironment();
+if (app.locals.giftArchive) {
+  const cleanArchive = () => app.locals.giftArchive.cleanup().catch(() => console.error('Gift archive cleanup failed; check archive permissions.'));
+  cleanArchive();
+  setInterval(cleanArchive, 60 * 60_000).unref();
+}
 let generatingBooks = 0;
 const publicGift = gift => gift ? {theme:gift.theme,title:gift.title,message:gift.message} : null;
 const languages = new Set(['English', 'Deutsch', 'Español', 'Français', 'Italiano', 'Português', 'العربية', 'فارسی', 'हिन्दी', '中文', '日本語']);
@@ -35,6 +42,16 @@ function cleanSessions() { const now = Date.now(); for (const [id, s] of session
 setInterval(cleanSessions, 60_000).unref();
 app.use('/api', (req, res, next) => {res.set('Cache-Control','no-store'); next();});
 app.get('/api/status', (_req, res) => res.json({available: live()}));
+app.get('/api/gifts/archive-status', async (_req, res) => {
+  try {if (!app.locals.giftArchive) return res.json({available:false}); await app.locals.giftArchive.prepare(); res.json({available:true});}
+  catch {res.json({available:false});}
+});
+app.post('/api/gifts/delete-archive', async (req, res) => {
+  if (Object.keys(req.body || {}).length !== 1 || typeof req.body?.code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(req.body.code)) return res.status(400).json({error:'Invalid deletion code.'});
+  if (!app.locals.giftArchive) return res.status(503).json({error:'Archive unavailable.'});
+  try {await app.locals.giftArchive.remove(req.body.code); res.status(204).end();}
+  catch {res.status(503).json({error:'Archive unavailable.'});}
+});
 app.post('/api/report', async (req,res) => {
   const kinds = {unsafe_answer:'report_unsafe_answer',other:'report_other',immediate_danger:'report_immediate_danger'};
   if (!Object.hasOwn(kinds, req.body?.category) || Object.keys(req.body).length !== 1) return res.status(400).json({error:'Invalid report.'});
@@ -136,7 +153,7 @@ app.delete('/api/session/:id', (req, res) => {const s = sessions.get(req.params.
 app.post('/api/gifts/discard', (req,res) => {if(typeof req.body?.token==='string')finishedGifts.delete(req.body.token);res.status(204).end();});
 app.post('/api/gifts/book', async (req,res) => {
   const token=req.body?.token;
-  if(typeof token!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(token) || Object.keys(req.body).length!==1) return res.status(400).json({code:'book_unavailable'});
+  if(typeof token!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(token) || Object.keys(req.body).some(key=>!['token','saveIllustration'].includes(key)) || (req.body.saveIllustration !== undefined && typeof req.body.saveIllustration !== 'boolean')) return res.status(400).json({code:'book_unavailable'});
   const entry=finishedGifts.get(token);
   if(!entry || entry.expires<=Date.now()) {finishedGifts.delete(token);return res.status(410).json({code:'book_expired'});}
   if(entry.busy || generatingBooks>=3) return res.status(429).json({code:'book_busy'});
@@ -152,6 +169,21 @@ app.post('/api/gifts/book', async (req,res) => {
     await verifySafetySink();
     if(abort.signal.aborted || res.destroyed)return;
     if(finishedGifts.get(token)!==entry || entry.expires<=Date.now())return res.status(410).json({code:'book_expired'});
+    let archiveStatus='not-requested', deletionCode;
+    if (req.body.saveIllustration === true) {
+      try {
+        if (!app.locals.giftArchive) throw Error('Archive unavailable');
+        deletionCode = await app.locals.giftArchive.save(pdf);
+        archiveStatus = 'saved';
+      } catch {archiveStatus='unavailable';}
+    }
+    if (deletionCode) {
+      const savedCode = deletionCode;
+      res.on('close', () => {if (!res.writableFinished) app.locals.giftArchive.remove(savedCode).catch(()=>{});});
+      if (abort.signal.aborted || res.destroyed) {await app.locals.giftArchive.remove(savedCode).catch(()=>{}); return;}
+    }
+    res.set('X-Gift-Archive', archiveStatus);
+    if (deletionCode) res.set('X-Gift-Deletion-Code', deletionCode);
     res.set({'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="santa-illustrated-gift.pdf"','X-Content-Type-Options':'nosniff'});
     res.send(pdf);finishedGifts.delete(token);
   } catch(error) {

@@ -9,7 +9,7 @@ const santaScene = $('scene'), homeSceneParent = santaScene.parentElement, homeS
 const gifts = {star:'⭐',rocket:'🚀',teddy:'🧸',book:'📖',rainbow:'🌈',tree:'🌲',moon:'🌙',dragon:'🐉',unicorn:'🦄',cat:'🐈',music:'🎵',art:'🎨',ocean:'🐬',dinosaur:'🦕',butterfly:'🦋',football:'⚽'};
 let titleKey = 'listening', statusKey = 'initial', errorKey = '', currentGift = null, giftLanguage = '', ending = false, isRecording = false, reportKey = '';
 let replayStartTimer = null, replayStopTimer = null;
-let bookToken = null, bookUrl = null, bookController = null, bookStatusKey = '';
+let bookToken = null, bookUrl = null, bookController = null, bookStatusKey = '', archiveStatusKey = '', archiveAvailable = false, archiveDeleteStatusKey = '';
 const t = key => translate($('language').value, key);
 function setTitle(key){titleKey = key; $('call-title').textContent = t(key);}
 function setStatus(key){statusKey = key; $('call-status').textContent = t(key);}
@@ -31,6 +31,7 @@ function clearBook(){
   if(bookToken){const token=bookToken;bookToken=null;fetch('/api/gifts/discard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),keepalive:true}).catch(()=>{});}
   bookStatusKey='';$('book-status').textContent='';$('book-create').disabled=false;
   $('book-create').classList.remove('hidden');$('book-link').classList.add('hidden');$('book-link').removeAttribute('href');$('book-download').classList.add('hidden');
+  $('archive-consent').checked=false;$('archive-result').classList.add('hidden');$('archive-code').value='';archiveStatusKey='';$('archive-result-text').textContent='';
 }
 function clearGiftReplay(){
   clearTimeout(replayStartTimer);clearTimeout(replayStopTimer);
@@ -55,10 +56,17 @@ function updateLanguage(){
   renderGift();
   $('report-status').textContent = reportKey ? t(reportKey) : '';
   $('book-status').textContent = bookStatusKey ? t(bookStatusKey) : '';
+  $('archive-availability').textContent = archiveAvailable ? '' : t('archiveUnavailable');
+  $('archive-result-text').textContent = archiveStatusKey ? t(archiveStatusKey) : '';
+  $('delete-gift-status').textContent = archiveDeleteStatusKey ? t(archiveDeleteStatusKey) : '';
   $('record').setAttribute('aria-label', t(isRecording ? 'recordStop' : 'recordStart'));
 }
 $('language').addEventListener('change', updateLanguage);
 updateLanguage();
+fetch('/api/gifts/archive-status').then(response=>response.ok ? response.json() : {available:false}).then(data=>{
+  archiveAvailable=data.available===true;$('archive-consent').disabled=!archiveAvailable;
+  $('archive-availability').textContent=archiveAvailable?'':t('archiveUnavailable');
+}).catch(()=>{$('archive-availability').textContent=t('archiveUnavailable');});
 function show(id){
   for (const x of ['call','gift']) $(x).classList.toggle('hidden',x!==id);
   if(id==='call') $('call-avatar').appendChild(santaScene);
@@ -151,15 +159,20 @@ $('start').addEventListener('click',start);$('record').addEventListener('click',
 $('book-create').addEventListener('click',async()=>{
   if(!bookToken || bookController)return;
   const token=bookToken, controller=new AbortController();bookController=controller;
-  $('book-create').disabled=true;bookStatusKey='bookCreating';$('book-status').textContent=t(bookStatusKey);
+  $('book-create').disabled=true;$('archive-consent').disabled=true;bookStatusKey='bookCreating';$('book-status').textContent=t(bookStatusKey);
   let timedOut=false;const timeout=setTimeout(()=>{timedOut=true;controller.abort();},4*60*1000);
   try {
-    const response=await fetch('/api/gifts/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),signal:controller.signal});
+    const response=await fetch('/api/gifts/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,saveIllustration:$('archive-consent').checked}),signal:controller.signal});
     if(!response.ok){let code;try{code=(await response.json()).code;}catch{}throw Error(code||'book_unavailable');}
     const pdf=await response.blob();if(!pdf.size || pdf.type!=='application/pdf')throw Error('book_unavailable');
     if(bookToken!==token || controller.signal.aborted)return;
     bookUrl=URL.createObjectURL(pdf);$('book-link').href=bookUrl;$('book-link').classList.remove('hidden');$('book-create').classList.add('hidden');
     bookStatusKey='bookReady';$('book-status').textContent=t(bookStatusKey);
+    const archiveResult=response.headers.get('X-Gift-Archive');
+    if(archiveResult==='saved'){
+      const code=response.headers.get('X-Gift-Deletion-Code');
+      if(code && /^[A-Za-z0-9_-]{43}$/.test(code)){$('archive-code').value=code;archiveStatusKey='archiveSaved';$('archive-result-text').textContent=t(archiveStatusKey);$('archive-result').classList.remove('hidden');}
+    }else if(archiveResult==='unavailable'){bookStatusKey='archiveFailed';$('book-status').textContent=t(bookStatusKey);}
   }catch(error){
     if(bookToken!==token || (controller.signal.aborted && !timedOut))return;
     bookStatusKey=error.message==='book_expired'?'bookExpired':error.message==='book_busy'?'bookBusy':'bookError';
@@ -167,7 +180,17 @@ $('book-create').addEventListener('click',async()=>{
   }finally{
     clearTimeout(timeout);if(bookController===controller)bookController=null;
     if(bookToken===token)$('book-create').disabled=bookStatusKey==='bookExpired';
+    $('archive-consent').disabled=!archiveAvailable;
   }
+});
+$('delete-gift-button').addEventListener('click',async()=>{
+  $('delete-gift-button').disabled=true;
+  try {
+    const response=await fetch('/api/gifts/delete-archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:$('delete-code').value.trim()})});
+    archiveDeleteStatusKey=response.ok?'archiveDeleted':'archiveDeleteError';
+    if(response.ok)$('delete-code').value='';
+  }catch {archiveDeleteStatusKey='archiveDeleteError';}
+  finally {$('delete-gift-button').disabled=false;$('delete-gift-status').textContent=t(archiveDeleteStatusKey);}
 });
 $('report-send').addEventListener('click', async () => {
   $('report-send').disabled=true;

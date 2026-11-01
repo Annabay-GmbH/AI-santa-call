@@ -2,6 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
 process.env.CHILD_SAFETY_REVIEWED = 'false';
+Object.assign(process.env,{GIFT_ARCHIVE_DIR:'',GIFT_ARCHIVE_KEY:'',GIFT_ARCHIVE_KEY_FILE:''});
 const { default: app } = await import('../server.js');
 const server = app.listen(0);
 await new Promise(resolve => server.once('listening', resolve));
