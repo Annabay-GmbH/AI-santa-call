@@ -2,10 +2,14 @@ import {PDFDocument, rgb} from 'pdf-lib';
 
 export class GiftImageSafetyError extends Error {}
 const categories = ['sexual','sexual/minors','violence','self-harm','harassment','hate','illicit'];
-function moderationSafe(result) {
-  return result && result.type === 'moderation_result' && typeof result.flagged === 'boolean' &&
-    result.categories && categories.every(key => typeof result.categories[key] === 'boolean') &&
-    !result.flagged && !Object.values(result.categories).some(value => value === true);
+function assertModerationSafe(result) {
+  if (!result || result.type !== 'moderation_result' || typeof result.flagged !== 'boolean' ||
+      !result.categories || categories.some(key => typeof result.categories[key] !== 'boolean')) {
+    throw new Error('Image moderation unavailable');
+  }
+  if (result.flagged || Object.values(result.categories).some(value => value === true)) {
+    throw new GiftImageSafetyError('Image moderation did not pass');
+  }
 }
 
 async function checkImage(ai, image, signal) {
@@ -19,7 +23,8 @@ async function checkImage(ai, image, signal) {
     max_output_tokens:300
   },{signal});
   if (response.status && response.status !== 'completed') throw new Error('Image safety check incomplete');
-  if (!moderationSafe(response.moderation?.input) || !moderationSafe(response.moderation?.output)) throw new GiftImageSafetyError('Image moderation did not pass');
+  assertModerationSafe(response.moderation?.input);
+  assertModerationSafe(response.moderation?.output);
   let parsed;try{parsed=JSON.parse(response.output_text);}catch{throw new Error('Image safety check unavailable');}
   if (parsed?.decision === 'unsafe') throw new GiftImageSafetyError('Image safety check did not pass');
   if (parsed?.decision !== 'safe' || Object.keys(parsed).length !== 1) throw new Error('Image safety check unavailable');

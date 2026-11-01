@@ -93,3 +93,17 @@ test('unsafe generated illustrations cannot be downloaded',async()=>{
  app.locals.createOpenAIClient=()=>ai;assert.equal((await sendTurn(id)).status,200);const data=await (await fetch(`${base}/api/session/${id}/finish`,{method:'POST'})).json();
  const response=await fetch(`${base}/api/gifts/book`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:data.bookToken})});assert.equal(response.status,503);assert.notEqual(response.headers.get('content-type'),'application/pdf');assert.equal(ai.calls.images.length,1);
 });
+
+test('a call without an approved gift cannot create a book token',async()=>{
+ const id=await authorizedCall();const response=await fetch(`${base}/api/session/${id}/finish`,{method:'POST'});
+ assert.deepEqual(await response.json(),{gift:null,bookToken:null});
+ const invalid=await fetch(`${base}/api/gifts/book`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:'a'.repeat(43)})});assert.equal(invalid.status,410);
+});
+
+test('missing image moderation fails closed without returning a PDF',async()=>{
+ const id=await authorizedCall(),ai=fakeAI(['safe','safe']),original=ai.responses.create;
+ ai.responses.create=async options=>options.text?.format?.name==='gift_image_safety' ? {output_text:'{"decision":"safe"}',moderation:{input:{type:'error'}}} : original(options);
+ app.locals.createOpenAIClient=()=>ai;assert.equal((await sendTurn(id)).status,200);const data=await (await fetch(`${base}/api/session/${id}/finish`,{method:'POST'})).json();
+ const result=await fetch(`${base}/api/gifts/book`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:data.bookToken})});assert.equal(result.status,503);assert.equal((await result.json()).code,'book_unavailable');
+ const log=(await readFile(process.env.SAFETY_EVENTS_FILE,'utf8')).trim().split('\n').map(JSON.parse);assert.ok(log.some(event=>event.type==='screen_unavailable'&&event.stage==='gift_image_check'));
+});
