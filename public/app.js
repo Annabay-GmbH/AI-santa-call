@@ -9,6 +9,7 @@ const santaScene = $('scene'), homeSceneParent = santaScene.parentElement, homeS
 const gifts = {star:'⭐',rocket:'🚀',teddy:'🧸',book:'📖',rainbow:'🌈',tree:'🌲',moon:'🌙',dragon:'🐉',unicorn:'🦄',cat:'🐈',music:'🎵',art:'🎨',ocean:'🐬',dinosaur:'🦕',butterfly:'🦋',football:'⚽'};
 let titleKey = 'listening', statusKey = 'initial', errorKey = '', currentGift = null, giftLanguage = '', ending = false, isRecording = false, reportKey = '';
 let replayStartTimer = null, replayStopTimer = null;
+let bookToken = null, bookUrl = null, bookController = null, bookStatusKey = '';
 const t = key => translate($('language').value, key);
 function setTitle(key){titleKey = key; $('call-title').textContent = t(key);}
 function setStatus(key){statusKey = key; $('call-status').textContent = t(key);}
@@ -24,6 +25,13 @@ function renderGift(){
   $('gift-name').textContent=gift ? gift.title : t('star');
   $('gift-text').textContent=gift ? gift.message : '';
 }
+function clearBook(){
+  if(bookController){bookController.abort();bookController=null;}
+  if(bookUrl){URL.revokeObjectURL(bookUrl);bookUrl=null;}
+  if(bookToken){const token=bookToken;bookToken=null;fetch('/api/gifts/discard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),keepalive:true}).catch(()=>{});}
+  bookStatusKey='';$('book-status').textContent='';$('book-create').disabled=false;
+  $('book-create').classList.remove('hidden');$('book-link').classList.add('hidden');$('book-link').removeAttribute('href');$('book-download').classList.add('hidden');
+}
 function clearGiftReplay(){
   clearTimeout(replayStartTimer);clearTimeout(replayStopTimer);
   $('gift-stage').classList.remove('is-replaying');$('gift-replay-status').textContent='';
@@ -37,6 +45,7 @@ function resetGift(){
 function openGift(){
   $('gift-stage').classList.add('is-open');$('gift-open').disabled=true;$('gift-open').setAttribute('aria-hidden','true');
   $('gift-intro').classList.add('hidden');$('gift-copy').classList.remove('hidden');$('gift-replay').classList.remove('hidden');
+  if(bookToken)$('book-download').classList.remove('hidden');
 }
 function updateLanguage(){
   localize($('language').value);
@@ -45,6 +54,7 @@ function updateLanguage(){
   $('setup-error').textContent = errorKey ? t(errorKey) : '';
   renderGift();
   $('report-status').textContent = reportKey ? t(reportKey) : '';
+  $('book-status').textContent = bookStatusKey ? t(bookStatusKey) : '';
   $('record').setAttribute('aria-label', t(isRecording ? 'recordStop' : 'recordStart'));
 }
 $('language').addEventListener('change', updateLanguage);
@@ -86,8 +96,8 @@ function stopPlayback(){
 }
 function stopMedia(){ clearTimeout(recordingTimeout); if(recorder && recorder.state !== 'inactive') {recorder.onstop=null;recorder.stop();} recorder=null; stream?.getTracks().forEach(t=>t.stop());stream=null; stopPlayback(); }
 async function start(){
-  setError(''); if(!$('adult').checked){setError('needAdult');return;}
-  $('start').disabled=true;$('language').disabled=true;
+  if(ending)return;setError(''); if(!$('adult').checked){setError('needAdult');return;}
+  clearBook();$('start').disabled=true;$('language').disabled=true;
   try {const response=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adultPresent:true,language:$('language').value})});const data=await response.json();if(!response.ok) throw Error(response.status === 503 ? 'unavailable' : 'error');session=data.id;$('safety-advice').classList.add('hidden');$('language').disabled=true;started=Date.now();setTitle('listening');setStatus('initial');$('record').disabled=false;show('call');timer=setInterval(()=>{const n=Math.floor((Date.now()-started)/1000);$('timer').textContent=`${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;if(n>=300) end();},1000);}
   catch(e){$('language').disabled=false;setError(e.message === 'unavailable' ? e.message : 'error');} finally {$('start').disabled=false;}
 }
@@ -117,9 +127,9 @@ async function end(){
   if(ending)return;ending=true;
   const active=session, language=$('language').value;session=null;$('language').disabled=false;isRecording=false;
   $('record').setAttribute('aria-label',t('recordStart'));clearInterval(timer);stopMedia();$('record').classList.remove('recording');
-  let gift=null;
-  if(active){try {const res=await fetch(`/api/session/${encodeURIComponent(active)}`,{method:'DELETE'});if(res.ok){const data=await res.json();if(validGift(data.gift))gift=data.gift;}}catch{}}
-  currentGift=gift;giftLanguage=language;resetGift();renderGift();show('gift');ending=false;
+  let gift=null, token=null;
+  if(active){try {const res=await fetch(`/api/session/${encodeURIComponent(active)}/finish`,{method:'POST'});if(res.ok){const data=await res.json();if(validGift(data.gift))gift=data.gift;if(typeof data.bookToken==='string' && /^[A-Za-z0-9_-]{43}$/.test(data.bookToken))token=data.bookToken;}}catch{}}
+  currentGift=gift;giftLanguage=language;bookToken=gift?token:null;resetGift();renderGift();show('gift');ending=false;
 }
 $('gift-open').addEventListener('click',openGift);
 $('gift-replay').addEventListener('click',()=>{
@@ -136,15 +146,36 @@ $('gift-replay').addEventListener('click',()=>{
     replayStopTimer=setTimeout(()=>{stage.classList.remove('is-replaying');$('gift-replay-status').textContent='';},2000);
   },visible || reduced ? 0 : 500);
 });
-$('start').addEventListener('click',start);$('record').addEventListener('click',record);$('end').addEventListener('click',end);$('again').addEventListener('click',()=>{clearGiftReplay();show(null);$('home').scrollIntoView({behavior:'smooth'});});
+$('start').addEventListener('click',start);$('record').addEventListener('click',record);$('end').addEventListener('click',end);$('again').addEventListener('click',()=>{clearBook();clearGiftReplay();show(null);$('home').scrollIntoView({behavior:'smooth'});});
 
+$('book-create').addEventListener('click',async()=>{
+  if(!bookToken || bookController)return;
+  const token=bookToken, controller=new AbortController();bookController=controller;
+  $('book-create').disabled=true;bookStatusKey='bookCreating';$('book-status').textContent=t(bookStatusKey);
+  let timedOut=false;const timeout=setTimeout(()=>{timedOut=true;controller.abort();},4*60*1000);
+  try {
+    const response=await fetch('/api/gifts/book',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),signal:controller.signal});
+    if(!response.ok){let code;try{code=(await response.json()).code;}catch{}throw Error(code||'book_unavailable');}
+    const pdf=await response.blob();if(!pdf.size || pdf.type!=='application/pdf')throw Error('book_unavailable');
+    if(bookToken!==token || controller.signal.aborted)return;
+    bookUrl=URL.createObjectURL(pdf);$('book-link').href=bookUrl;$('book-link').classList.remove('hidden');$('book-create').classList.add('hidden');
+    bookStatusKey='bookReady';$('book-status').textContent=t(bookStatusKey);
+  }catch(error){
+    if(bookToken!==token || (controller.signal.aborted && !timedOut))return;
+    bookStatusKey=error.message==='book_expired'?'bookExpired':error.message==='book_busy'?'bookBusy':'bookError';
+    $('book-status').textContent=t(bookStatusKey);
+  }finally{
+    clearTimeout(timeout);if(bookController===controller)bookController=null;
+    if(bookToken===token)$('book-create').disabled=bookStatusKey==='bookExpired';
+  }
+});
 $('report-send').addEventListener('click', async () => {
   $('report-send').disabled=true;
   try {const response=await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:$('report-category').value})});reportKey=response.ok?'reportSent':'reportFailed';}
   catch {reportKey='reportFailed';}
   finally {$('report-send').disabled=false;$('report-status').textContent=t(reportKey);}
 });
-window.addEventListener('pagehide',()=>{if(session)fetch(`/api/session/${encodeURIComponent(session)}`,{method:'DELETE',keepalive:true});stopMedia();});
+window.addEventListener('pagehide',()=>{if(session)fetch(`/api/session/${encodeURIComponent(session)}`,{method:'DELETE',keepalive:true});clearBook();stopMedia();});
 try {
  const host=$('scene'), scene=new THREE.Scene(), camera=new THREE.PerspectiveCamera(35,1,.1,100);camera.position.set(0,0,8.6);
  const renderer=new THREE.WebGLRenderer({alpha:true,antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;host.appendChild(renderer.domElement);host.classList.add('ready');

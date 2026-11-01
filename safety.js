@@ -11,7 +11,7 @@ export async function verifySafetySink(file = process.env.SAFETY_EVENTS_FILE) {
   finally {await handle.close();}
 }
 
-const diagnosticStages = new Set(['audio_prepare','transcription','input_moderation','input_classifier','input_check','generation','generation_incomplete','generation_format','output_moderation','output_classifier','output_check','speech','event_log']);
+const diagnosticStages = new Set(['audio_prepare','transcription','input_moderation','input_classifier','input_check','generation','generation_incomplete','generation_format','output_moderation','output_classifier','output_check','speech','event_log','gift_image','gift_image_check','gift_pdf']);
 export async function recordSafetyEvent(type, file = process.env.SAFETY_EVENTS_FILE, diagnostic = {}) {
   if (!eventTypes.has(type) || !file) throw new Error('Safety event sink unavailable');
   const handle = await open(file, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW || 0), 0o600);
