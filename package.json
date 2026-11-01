@@ -1,6 +1,26 @@
 {
-  "name": "santa-call", "version": "0.1.0", "private": true, "type": "module", "license": "GPL-3.0-only",
-  "scripts": {"start": "node server.js", "test": "node --test"},
-  "dependencies": {"dotenv": "^16.4.7", "express": "^4.21.2", "express-rate-limit": "^7.5.0", "helmet": "^8.1.0", "multer": "^2.0.2", "openai": "^6.0.0", "three": "^0.180.0"},
-  "engines": {"node": ">=20"}
+  "name": "santa-call",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "safety:monitor": "node scripts/monitor-safety.js",
+    "check:moderation": "node scripts/check-moderation.js"
+  },
+  "dependencies": {
+    "@fontsource/vazirmatn": "^5.3.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.2",
+    "openai": "^6.0.0",
+    "three": "^0.180.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }
