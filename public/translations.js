@@ -91,6 +91,9 @@ const archiveTexts=[
  ['大人の方へ（任意）：このイラストPDFをサーバーに最長90日間保存することに同意します。この保存先に会話や録音は保存されません。発行されるコードで早めに削除できます。','サーバーへの保存は利用できませんが、絵本はダウンロードできます。','イラストPDFを最長90日間保存しました。','絵本はダウンロードできますが、サーバーには保存できませんでした。','この非公開の削除コードを保管してください。サーバーのコピーを早めに削除できます。','保存したイラストを削除','大人の方が非公開の削除コードを入力すると、サーバーのコピーを削除できます。','削除コード','保存したプレゼントを削除','サーバーのコピーを削除したか、すでに存在していません。','削除できませんでした。コードを確認して再試行してください。']
 ];
 Object.values(extraRows).forEach((row,index)=>row.push(...archiveTexts[index]));
+extraKeys.push('injectionRefused');
+const injectionTexts=['Let’s talk about something else. What makes you smile?','Lass uns über etwas anderes sprechen. Was bringt dich zum Lächeln?','Hablemos de otra cosa. ¿Qué te hace sonreír?','Parlons d’autre chose. Qu’est-ce qui te fait sourire ?','Parliamo di qualcos’altro. Cosa ti fa sorridere?','Vamos falar de outra coisa. O que faz você sorrir?','لنتحدث عن شيء آخر. ما الذي يجعلك تبتسم؟','بیا درباره چیز دیگری حرف بزنیم. چه چیزی تو را خوشحال می‌کند؟','चलो किसी और बात के बारे में बात करें। तुम्हें किससे खुशी मिलती है?','我们聊点别的吧。什么能让你开心？','ほかのお話をしよう。どんなことが楽しい？'];
+Object.values(extraRows).forEach((row,index)=>row.push(injectionTexts[index]));
 const localeInfo = {English:['en','ltr'],Deutsch:['de','ltr'],Español:['es','ltr'],Français:['fr','ltr'],Italiano:['it','ltr'],Português:['pt','ltr'],العربية:['ar','rtl'],فارسی:['fa','rtl'],हिन्दी:['hi','ltr'],中文:['zh','ltr'],日本語:['ja','ltr']};
 export function translate(language, key) { const extraIndex = extraKeys.indexOf(key); if (extraIndex >= 0) return (extraRows[language] || extraRows.English)[extraIndex] ?? extraRows.English[extraIndex]; const row = rows[language] || rows.English; return row[keys.indexOf(key)] ?? rows.English[keys.indexOf(key)] ?? key; }
 export function localize(language, root = document) {
